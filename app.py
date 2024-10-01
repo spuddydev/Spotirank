@@ -177,8 +177,6 @@ else:
             st.header("**Option 2**")
             st.image(song_2['cover'], width=200)  # Display cover of song 2
             st.markdown(f"#### {name_2}")
-            
-           
 
         with vote_1:
             st.caption(f"{song_1['artist']}")
