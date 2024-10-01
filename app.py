@@ -10,6 +10,8 @@ SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
 SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
 SPOTIPY_REDIRECT_URI = os.getenv("SPOTIPY_REDIRECT_URI")
 
+MAX_LENGTH = 45
+
 # Display album covers and song information
 header_col1, _, header_col2, _ = st.columns((8, 2, 2, 2))
 
@@ -23,8 +25,9 @@ sp = spotipy.Spotify(auth_manager=SpotifyOAuth(client_id=SPOTIPY_CLIENT_ID,
 @st.cache_data
 def get_songs_from_playlist(playlist_id: str) -> list:
     try:
-        playlist_count = sp.playlist(playlist_id)['tracks']['total']
-        print(playlist_count)
+        playlist_info = sp.playlist(playlist_id)
+        playlist_count = playlist_info['tracks']['total']
+        st.session_state["playlist_name"] = playlist_info['name']
         playlist = sp.playlist_items(playlist_id, limit=playlist_count)
         songs = []
         for item in playlist['items']:
@@ -42,6 +45,10 @@ def get_songs_from_playlist(playlist_id: str) -> list:
     except Exception as e:
         print(e)
         return None
+    
+def blank_lines(number_of_lines: int = 1) -> None:
+    for i in range(number_of_lines):
+        st.text("")
 
 def extract_playlist_id(playlist_url: str) -> str:
     return playlist_url.strip().split('/')[-1].split('?')[0]
@@ -49,9 +56,10 @@ def extract_playlist_id(playlist_url: str) -> str:
 # Function to update Elo ratings
 def update_elo(winner_rating: float, loser_rating: float, k: int = 32) -> tuple[float, float]:
     expected_winner = 1 / (1 + 10 ** ((loser_rating - winner_rating) / 400))
-    expected_loser = 1 / (1 + 10 ** ((winner_rating - loser_rating) / 400))
-    new_winner_rating = winner_rating + k * (1 - expected_winner)
-    new_loser_rating = loser_rating + k * (0 - expected_loser)
+    expected_loser = 1 - expected_winner  # This should match the winner's expectation
+
+    new_winner_rating = winner_rating + k * (1 - expected_winner)  # Correct for the winner
+    new_loser_rating = loser_rating + k * (0 - expected_loser)  # Correct for the loser
     return new_winner_rating, new_loser_rating
 
 def get_next_pair():
@@ -83,10 +91,10 @@ with header_col1:
 
 if st.session_state["playlist_id"] == None:
     playlist_url = st.text_input("Spotify Playlist Link")
+    number_of_comparisons = st.select_slider("How many times would you like to compare each song?", range(21)[1:], 10)
     playlist_submission = st.button("Submit")
-    number_of_comparisons = st.select_slider("How many times would you like to compare each song?", range(21)[5:], 10)
-
     songs = None
+
     if playlist_url is not None and playlist_submission:
         playlist_id = extract_playlist_id(playlist_url)
         songs = get_songs_from_playlist(playlist_id)
@@ -117,14 +125,10 @@ else:
     if st.session_state['comparison_count'] < st.session_state['target_comparisons'] and st.session_state['comparison_count'] >= 0:
         current_pair = get_next_pair()
         with header_col2:
-            st.text("")
-            st.text("")
-            st.text("")
+            blank_lines(3)
             st.caption(f":violet[{st.session_state['comparison_count']}/{st.session_state['target_comparisons']}]")
     else:
         current_pair = None
-
-
     if current_pair is None:
         # Sort songs by their Elo rating
         ranked_songs = sorted(st.session_state['shuffled_songs'], key=lambda song: song['rating'], reverse=True)
@@ -133,12 +137,14 @@ else:
         for rank, song in enumerate(ranked_songs, 1):
             st.write(f"{rank}. {song['name']} - {song['artist']} - [Listen on Spotify]({song['url']}) - Elo: {song['rating']:.2f}")
 
+        blank_lines(1)
+
         # Option to create a new playlist
         if st.button("Create New Ranked Playlist"):
             user_id = sp.current_user()['id']  # Get current user's Spotify ID
 
             # Create a new playlist
-            new_playlist = sp.user_playlist_create(user=user_id, name="ONEHUNDRED", public=False, description="The creme")
+            new_playlist = sp.user_playlist_create(user=user_id, name=f"Ranked {st.session_state["playlist_name"]}", public=False, description="Spotirank ranked playlist.")
             new_playlist_id = new_playlist['id']
 
             # Add songs to the new playlist in ranked order (best to worst)
@@ -146,24 +152,43 @@ else:
             sp.playlist_add_items(playlist_id=new_playlist_id, items=song_ids)
 
             st.write(f"New playlist created: [View Playlist on Spotify](https://open.spotify.com/playlist/{new_playlist_id})")
+        if st.button("Play again?"):
+            st.session_state["playlist_id"] = None
+            get_songs_from_playlist.clear()
+            st.rerun()
     else:
         song_1, song_2 = current_pair
+
         col1, col2 = st.columns(2)
+        vote_1, vote_2 = st.columns(2)
         with col1:
+            name_1 = song_1["name"]
+            if len(name_1) > MAX_LENGTH:
+                name_1 = name_1[:MAX_LENGTH] + '...'
             st.header(f"**Option 1**")
             st.image(song_1['cover'], width=200)  # Display cover of song 1
-            st.markdown(f"#### {song_1['name']}")
+            st.markdown(f"#### {name_1}")
+       
+
+        with col2:
+            name_2 = song_2["name"]
+            if len(name_2) > MAX_LENGTH:
+                name_2 = name_2[:MAX_LENGTH] + '...'
+            st.header("**Option 2**")
+            st.image(song_2['cover'], width=200)  # Display cover of song 2
+            st.markdown(f"#### {name_2}")
+            
+           
+
+        with vote_1:
             st.caption(f"{song_1['artist']}")
             st.write(f"[Listen on Spotify]({song_1['url']})")
             if st.button(f"Vote Option 1"):
                 song_1['rating'], song_2['rating'] = update_elo(song_1['rating'], song_2['rating'])
                 st.session_state['comparison_count'] += 1
                 st.rerun()  # Only refresh to move to the next pair
-
-        with col2:
-            st.header("**Option 2**")
-            st.image(song_2['cover'], width=200)  # Display cover of song 2
-            st.markdown(f"#### {song_2['name']}")
+                
+        with vote_2:
             st.caption(f"{song_2['artist']}")
             st.write(f"[Listen on Spotify]({song_2['url']})")
             if st.button(f"Vote Option 2"):
